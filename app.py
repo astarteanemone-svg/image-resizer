@@ -5,8 +5,9 @@ import os
 import zipfile
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.worksheet.datavalidation import DataValidation
 
-APP_TITLE = "印刷向けサイズ指定＋Excel台帳作成ツール"
+APP_TITLE = "印刷向けサイズ指定＋Excel台帳（プルダウン＋自動調整付き）"
 st.title(APP_TITLE)
 
 SAVE_DIR = "resized"
@@ -123,31 +124,66 @@ if uploaded_files and prefix.strip():
     zip_buffer.seek(0)
     st.download_button("処理済み画像をまとめてダウンロード (ZIP)", zip_buffer, "processed_images.zip")
 
-    # ---- Excel台帳作成 ----
+    # ---- Excel台帳作成（プルダウン＋行高さ自動調整）----
     wb = Workbook()
     ws = wb.active
     ws.title = "写真台帳"
-    ws.append(["No", "写真", "ファイル名", "備考"])
+    ws.append(["No", "写真", "ファイル名", "部材種類", "損傷種類", "損傷範囲/状態", "備考"])
 
     row = 2
+    max_width_px = 300  # 画像の最大幅(px)
+
     for no, fname, path, info in processed_items:
         ws.cell(row=row, column=1, value=no)
         ws.cell(row=row, column=3, value=fname)
-        ws.cell(row=row, column=4, value="")  # 備考は空欄
 
+        # 空欄セル（プルダウン対象）
+        ws.cell(row=row, column=4, value="")
+        ws.cell(row=row, column=5, value="")
+        ws.cell(row=row, column=6, value="")
+        ws.cell(row=row, column=7, value="")
+
+        # --- 縦横比を維持してリサイズ ---
         xl_img = XLImage(path)
-        xl_img.width, xl_img.height = 400, 400  # サムネイル大きめ
+        aspect_ratio = xl_img.height / xl_img.width
+        new_width = max_width_px
+        new_height = int(new_width * aspect_ratio)
+
+        xl_img.width, xl_img.height = new_width, new_height
         ws.add_image(xl_img, f"B{row}")
 
-        row += 20
+        # --- 行高と列幅を画像に合わせて調整 ---
+        ws.row_dimensions[row].height = new_height * 0.75
+        ws.column_dimensions["B"].width = new_width / 7
 
+        row += 1
+
+    # === プルダウン設定 ===
+    parts_list = ["上部工", "床版", "主桁", "支承", "その他"]
+    damage_list = ["ひび割れ", "剥離・鉄筋露出", "漏水・遊離石灰", "その他"]
+    severity_list = ["部分的・軽度", "部分的・中程度", "全体的・重度"]
+
+    dv_parts = DataValidation(type="list", formula1='"{}"'.format(",".join(parts_list)), allow_blank=True)
+    dv_damage = DataValidation(type="list", formula1='"{}"'.format(",".join(damage_list)), allow_blank=True)
+    dv_severity = DataValidation(type="list", formula1='"{}"'.format(",".join(severity_list)), allow_blank=True)
+
+    ws.add_data_validation(dv_parts)
+    ws.add_data_validation(dv_damage)
+    ws.add_data_validation(dv_severity)
+
+    # 適用範囲（例：100行分）
+    dv_parts.add("D2:D100")
+    dv_damage.add("E2:E100")
+    dv_severity.add("F2:F100")
+
+    # ---- 保存 & ダウンロード ----
     excel_buffer = io.BytesIO()
     wb.save(excel_buffer)
     excel_buffer.seek(0)
 
     st.download_button(
-        "Excel写真台帳をダウンロード",
+        "Excel写真台帳（プルダウン＋自動調整）をダウンロード",
         data=excel_buffer,
-        file_name="photo_ledger.xlsx",
+        file_name="photo_ledger_adjusted.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
